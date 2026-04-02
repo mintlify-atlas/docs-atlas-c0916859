@@ -1,0 +1,84 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Prometheus Node Exporter",
+  "projectDescription": "A Prometheus exporter for hardware and OS metrics exposed by *NIX kernels, featuring pluggable metric collectors for CPU, memory, disk, network, and more.",
+  "theme": "aspen",
+  "primaryColor": "#e86441",
+  "lightColor": "#f4b7a8",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/systemd",
+              "deployment/kubernetes"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/flags",
+              "configuration/tls-authentication",
+              "configuration/filtering"
+            ]
+          },
+          {
+            "group": "Collectors",
+            "pages": [
+              "collectors/overview",
+              "collectors/enabled-by-default",
+              "collectors/disabled-by-default",
+              "collectors/textfile"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/prometheus-integration",
+              "operations/recording-rules",
+              "operations/upgrading"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "60+ built-in metric collectors for CPU, memory, disk, network, and system metrics",
+    "Pluggable collector architecture with enable/disable flags",
+    "Textfile collector for custom and batch job metrics",
+    "TLS and basic authentication support via exporter-toolkit",
+    "Per-request collector filtering via collect[] and exclude[] URL parameters",
+    "Cross-platform support: Linux, Darwin, FreeBSD, OpenBSD, Solaris, AIX",
+    "Docker and container-native deployment support",
+    "Include/exclude filters for fine-grained metric selection"
+  ],
+  "publicApiSurface": [
+    "--collector.<name> (enable collector)",
+    "--no-collector.<name> (disable collector)",
+    "--collector.disable-defaults",
+    "--web.listen-address (default :9100)",
+    "--web.telemetry-path (default /metrics)",
+    "--web.config.file (TLS/auth config)",
+    "--path.rootfs (for container deployments)",
+    "GET /metrics (Prometheus metrics endpoint)",
+    "collect[] URL parameter (per-request collector filter)",
+    "exclude[] URL parameter (per-request collector exclusion)",
+    "--collector.textfile.directory",
+    "--collector.filesystem.mount-points-exclude",
+    "--collector.netdev.device-include"
+  ]
+}

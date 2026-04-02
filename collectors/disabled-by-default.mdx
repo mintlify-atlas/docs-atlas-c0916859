@@ -1,0 +1,204 @@
+---
+title: "Optional Collectors"
+description: "Collectors that are disabled by default and must be explicitly enabled. Many carry performance or cardinality tradeoffs."
+---
+
+These collectors are not enabled by default. They exist because they are useful in specific scenarios, but each one carries at least one of the following tradeoffs:
+
+- **High cardinality** — they produce a large number of time series that can stress your Prometheus server.
+- **Long runtime** — collection may take longer than your `scrape_interval` or `scrape_timeout`, causing missed scrapes.
+- **Significant resource demands** — they consume notable CPU, memory, or I/O on the host.
+
+<Warning>
+Enable optional collectors with care. Enable at most one at a time, test first on a non-production system, and then verify on a single production node before rolling out broadly. Monitor `node_scrape_collector_duration_seconds` and `scrape_samples_post_metric_relabeling` closely after enabling any new collector.
+</Warning>
+
+## Enabling optional collectors
+
+Pass `--collector.<name>` for each collector you want to add. You can combine multiple flags:
+
+```bash
+./node_exporter --collector.systemd --collector.processes
+```
+
+To enable optional collectors while simultaneously disabling defaults you do not need:
+
+```bash
+./node_exporter \
+  --collector.disable-defaults \
+  --collector.cpu \
+  --collector.meminfo \
+  --collector.filesystem \
+  --collector.systemd
+```
+
+<Tip>
+After enabling a new collector, query `node_scrape_collector_duration_seconds{collector="<name>"}` to confirm it completes within your scrape timeout. If it regularly exceeds your timeout, consider whether you need to narrow its scope using include/exclude flags.
+</Tip>
+
+## Full list
+
+| Name | Description | OS |
+|------|-------------|----|
+| `buddyinfo` | Memory fragment statistics from `/proc/buddyinfo` | Linux |
+| `cgroups` | Summary of active and enabled cgroups | Linux |
+| `cpu_vulnerabilities` | CPU vulnerability information from sysfs | Linux |
+| `devstat` | Device statistics | Dragonfly, FreeBSD |
+| `drm` | GPU metrics via sysfs/DRM (`amdgpu` driver only) | Linux |
+| `drbd` | Distributed Replicated Block Device statistics (up to version 8.4) | Linux |
+| `ethtool` | Network interface information and driver statistics (equivalent to `ethtool`, `ethtool -S`, `ethtool -i`) | Linux |
+| `interrupts` | Detailed interrupt statistics | Linux, OpenBSD |
+| `kernel_hung` | Number of tasks detected as hung from `/proc/sys/kernel/hung_task_detect_count` | Linux |
+| `ksmd` | Kernel Samepage Merging statistics from `/sys/kernel/mm/ksm` | Linux |
+| `lnstat` | Statistics from `/proc/net/stat/` | Linux |
+| `logind` | Session counts from logind | Linux |
+| `meminfo_numa` | Memory statistics from NUMA node sysfs paths | Linux |
+| `mountstats` | Filesystem statistics from `/proc/self/mountstats`, including detailed NFS client stats | Linux |
+| `network_route` | Routing table as metrics | Linux |
+| `pcidevice` | PCI device information including link status and parent devices | Linux |
+| `perf` | perf-based metrics (dependent on kernel configuration and settings) | Linux |
+| `processes` | Aggregate process statistics from `/proc` | Linux |
+| `qdisc` | Queuing discipline statistics | Linux |
+| `slabinfo` | Slab allocator statistics from `/proc/slabinfo` | Linux |
+| `softirqs` | Detailed softirq statistics from `/proc/softirqs` | Linux |
+| `sysctl` | Sysctl values from `/proc/sys`, configured via include flags | Linux |
+| `swap` | Swap information from `/proc/swaps` | Linux |
+| `systemd` | Service and system status from systemd | Linux |
+| `tcpstat` | TCP connection status from `/proc/net/tcp` and `/proc/net/tcp6` (potential performance issues under high load) | Linux |
+| `wifi` | WiFi device and station statistics | Linux |
+| `xfrm` | Statistics from `/proc/net/xfrm_stat` | Linux |
+| `zoneinfo` | NUMA memory zone metrics | Linux |
+
+---
+
+## Deep dives
+
+### perf
+
+The `perf` collector exposes hardware performance counter metrics using the Linux `perf_event_open(2)` syscall. Metrics available depend on your kernel configuration and the value of `kernel.perf_event_paranoid`.
+
+**Paranoia levels:**
+
+| Value | Access level |
+|-------|-------------|
+| `2` | User-space measurements only (default since Linux 4.6) |
+| `1` | Kernel and user measurements (default before Linux 4.6) |
+| `0` | CPU-specific data, but no raw tracepoint samples |
+| `-1` | No restrictions |
+
+For the most complete set of metrics, set paranoia to `0`:
+
+```bash
+sysctl -w kernel.perf_event_paranoid=0
+```
+
+**CPU selection:**
+
+By default, `perf` collects metrics only for the CPUs that node_exporter's goroutines run on. To explicitly specify which CPUs to monitor, use `--collector.perf.cpus`:
+
+```bash
+# Collect metrics on CPUs 2 through 6
+./node_exporter --collector.perf --collector.perf.cpus=2-6
+
+# Collect with stride: CPUs 1, 5, and 10
+./node_exporter --collector.perf --collector.perf.cpus=1-10:5
+```
+
+**Tracepoints:**
+
+The perf collector can also count kernel tracepoint events using `--collector.perf.tracepoint`. Use `perf list` to discover available tracepoints:
+
+```bash
+./node_exporter --collector.perf --collector.perf.tracepoint="sched:sched_process_exec"
+```
+
+### sysctl
+
+The `sysctl` collector reads values from `/proc/sys` and exposes them as metrics. You configure which sysctl keys to expose using the include flags, which can be repeated.
+
+**Numeric values** use `--collector.sysctl.include`:
+
+```bash
+# Single numeric value
+# vm.user_reserve_kbytes = 131072
+# -> node_sysctl_vm_user_reserve_kbytes 131072
+./node_exporter --collector.sysctl --collector.sysctl.include=vm.user_reserve_kbytes
+```
+
+For sysctl keys with multiple space-separated values, an `index` label is used automatically:
+
+```bash
+# net.ipv4.tcp_rmem = 4096   131072  6291456
+# -> node_sysctl_net_ipv4_tcp_rmem{index="0"} 4096
+# -> node_sysctl_net_ipv4_tcp_rmem{index="1"} 131072
+# -> node_sysctl_net_ipv4_tcp_rmem{index="2"} 6291456
+./node_exporter --collector.sysctl --collector.sysctl.include=net.ipv4.tcp_rmem
+```
+
+To give the indexes meaningful names, append a colon-delimited mapping:
+
+```bash
+# -> node_sysctl_net_ipv4_tcp_rmem_min 4096
+# -> node_sysctl_net_ipv4_tcp_rmem_default 131072
+# -> node_sysctl_net_ipv4_tcp_rmem_max 6291456
+./node_exporter --collector.sysctl \
+  --collector.sysctl.include=net.ipv4.tcp_rmem:min,default,max
+```
+
+**String values** use `--collector.sysctl.include-info` and are exposed as info metrics:
+
+```bash
+# kernel.core_pattern = core
+# -> node_sysctl_info{key="kernel.core_pattern_info", value="core"} 1
+./node_exporter --collector.sysctl \
+  --collector.sysctl.include-info=kernel.core_pattern
+```
+
+### ethtool
+
+The `ethtool` collector exposes network driver statistics equivalent to running `ethtool -S`, `ethtool`, and `ethtool -i` on each interface.
+
+**Scope control flags:**
+
+```bash
+# Only monitor eth0 and eth1
+./node_exporter --collector.ethtool \
+  --collector.ethtool.device-include="^eth[01]$"
+
+# Monitor everything except virtual interfaces
+./node_exporter --collector.ethtool \
+  --collector.ethtool.device-exclude="^(lo|veth|docker).*"
+
+# Filter which driver metrics to expose (regex on metric name)
+./node_exporter --collector.ethtool \
+  --collector.ethtool.metrics-include=".*queue.*"
+```
+
+Because the number of metrics varies by driver and driver version, `ethtool` can produce high cardinality on systems with many interfaces or verbose drivers. Use the include/exclude flags to limit scope.
+
+### systemd
+
+The `systemd` collector exposes service and unit state from the systemd D-Bus API.
+
+**Unit filtering:**
+
+By default the collector includes all units. On systems with many services this can generate substantial cardinality. Use `--collector.systemd.unit-include` to restrict which units are monitored:
+
+```bash
+# Monitor only SSH and nginx
+./node_exporter --collector.systemd \
+  --collector.systemd.unit-include="(sshd|nginx)\\.service"
+
+# Exclude transient and scope units
+./node_exporter --collector.systemd \
+  --collector.systemd.unit-exclude="\\.scope$"
+```
+
+Key metrics produced:
+
+```
+node_systemd_unit_state{name="sshd.service", state="active", type="service"}
+node_systemd_units{state="active"}
+node_systemd_units{state="failed"}
+node_systemd_system_running
+```

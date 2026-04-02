@@ -1,0 +1,206 @@
+---
+title: 'systemd'
+description: 'Deploy node_exporter as a managed systemd service with socket activation, a dedicated unprivileged user, and an environment file for configuration.'
+---
+
+Running node_exporter under systemd gives you process supervision, automatic restart on failure, dependency ordering, and centralised logging via journald. The upstream project ships ready-to-use unit files in the `examples/systemd/` directory of the repository.
+
+## Prerequisites
+
+- A Linux system with systemd (most modern distributions)
+- The `node_exporter` binary, either built from source or downloaded from the [GitHub releases page](https://github.com/prometheus/node_exporter/releases)
+
+## Deployment
+
+<Steps>
+  <Step title="Create a dedicated user">
+    Node exporter should run as an unprivileged user with no login shell. This limits the blast radius if the process is compromised.
+
+    ```bash
+    useradd --system --no-create-home --shell /sbin/nologin node_exporter
+    ```
+
+    The `--system` flag creates a system account with a UID below 1000 and no password. The `--shell /sbin/nologin` flag prevents interactive logins.
+  </Step>
+
+  <Step title="Install the binary">
+    Copy the binary to a system-wide location and set appropriate ownership:
+
+    ```bash
+    cp node_exporter /usr/sbin/node_exporter
+    chown root:root /usr/sbin/node_exporter
+    chmod 755 /usr/sbin/node_exporter
+    ```
+  </Step>
+
+  <Step title="Create the textfile collector directory">
+    The environment file configures node_exporter to use a textfile collector directory. Create it and assign ownership to the `node_exporter` user:
+
+    ```bash
+    mkdir -p /var/lib/node_exporter/textfile_collector
+    chown node_exporter:node_exporter /var/lib/node_exporter/textfile_collector
+    ```
+  </Step>
+
+  <Step title="Install the environment file">
+    Copy the sysconfig file. This is where you pass command-line flags to the service without editing the unit file itself:
+
+    ```bash
+    cp examples/systemd/sysconfig.node_exporter /etc/sysconfig/node_exporter
+    ```
+
+    Default contents:
+
+    ```bash
+    OPTIONS="--collector.textfile.directory /var/lib/node_exporter/textfile_collector"
+    ```
+
+    Edit this file to add or change flags as needed.
+
+    <Tip>
+      Use the environment file (`/etc/sysconfig/node_exporter`) to configure flags rather than editing the unit file directly. This keeps your configuration separate from the service definition and survives package updates that may overwrite unit files in `/usr/lib/systemd/system`. The unit file sources this file with `EnvironmentFile=-/etc/sysconfig/node_exporter` — the leading `-` means systemd will not fail if the file is absent.
+    </Tip>
+  </Step>
+
+  <Step title="Install the unit files">
+    Copy both the service unit and the socket unit to `/etc/systemd/system`:
+
+    ```bash
+    cp examples/systemd/node_exporter.service /etc/systemd/system/
+    cp examples/systemd/node_exporter.socket /etc/systemd/system/
+    ```
+
+    Reload systemd so it picks up the new units:
+
+    ```bash
+    systemctl daemon-reload
+    ```
+  </Step>
+
+  <Step title="Enable and start the service">
+    Enable the socket (not the service directly) so that systemd opens port 9100 at boot and starts node_exporter on first connection:
+
+    ```bash
+    systemctl enable --now node_exporter.socket
+    ```
+
+    You can also start the service directly without socket activation:
+
+    ```bash
+    systemctl enable --now node_exporter.service
+    ```
+  </Step>
+
+  <Step title="Verify the service">
+    Check that node_exporter is running and listening:
+
+    ```bash
+    systemctl status node_exporter
+    curl http://localhost:9100/metrics | head -5
+    ```
+  </Step>
+</Steps>
+
+## Unit file reference
+
+### Service unit
+
+```ini
+[Unit]
+Description=Node Exporter
+Requires=node_exporter.socket
+
+[Service]
+User=node_exporter
+# Fallback when environment file does not exist
+Environment=OPTIONS=
+EnvironmentFile=-/etc/sysconfig/node_exporter
+ExecStart=/usr/sbin/node_exporter --web.systemd-socket $OPTIONS
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Key directives explained:**
+
+| Directive | Meaning |
+|---|---|
+| `Requires=node_exporter.socket` | The service depends on the socket unit; systemd starts the socket first |
+| `User=node_exporter` | Run the process as the dedicated unprivileged user |
+| `EnvironmentFile=-/etc/sysconfig/node_exporter` | Load environment variables from the sysconfig file (the `-` prefix makes the file optional) |
+| `ExecStart=... --web.systemd-socket $OPTIONS` | Pass the socket file descriptor from systemd and any extra flags from `$OPTIONS` |
+
+### Socket unit
+
+```ini
+[Unit]
+Description=Node Exporter
+
+[Socket]
+ListenStream=9100
+
+[Install]
+WantedBy=sockets.target
+```
+
+The socket unit opens TCP port 9100 and passes the listening file descriptor to the service via `--web.systemd-socket`. This is called **socket activation**: systemd holds the port open and launches node_exporter only when a connection arrives, which also means the service can be restarted without dropping a listening socket.
+
+## Managing the service
+
+```bash
+# Check status
+systemctl status node_exporter
+
+# Start / stop / restart
+systemctl start node_exporter
+systemctl stop node_exporter
+systemctl restart node_exporter
+
+# View logs (follow mode)
+journalctl -u node_exporter -f
+
+# View recent logs
+journalctl -u node_exporter --since "1 hour ago"
+
+# Check if enabled at boot
+systemctl is-enabled node_exporter.socket
+```
+
+## Passing additional flags
+
+Edit `/etc/sysconfig/node_exporter` to add collector flags or other options:
+
+```bash
+OPTIONS="--collector.textfile.directory /var/lib/node_exporter/textfile_collector \
+         --collector.systemd \
+         --collector.processes"
+```
+
+Restart the service after editing the environment file:
+
+```bash
+systemctl restart node_exporter
+```
+
+## Hardening the service unit
+
+For production deployments, consider adding systemd hardening directives to the `[Service]` section:
+
+```ini
+[Service]
+User=node_exporter
+EnvironmentFile=-/etc/sysconfig/node_exporter
+ExecStart=/usr/sbin/node_exporter --web.systemd-socket $OPTIONS
+
+# Hardening
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadOnlyPaths=/
+ReadWritePaths=/var/lib/node_exporter/textfile_collector
+PrivateTmp=yes
+```
+
+<Note>
+  Some collectors (for example, `systemd`, `processes`, or `perf`) require access to parts of `/proc` or `/sys` that hardening directives may restrict. Test any hardening changes against your enabled collectors before deploying to production.
+</Note>

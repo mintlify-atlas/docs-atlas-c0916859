@@ -1,80 +1,198 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quick start"
+description: "Get from zero to host metrics in Prometheus in under five minutes."
 ---
 
-## Get started in three steps
+This guide walks you through installing node exporter, verifying the metrics endpoint, and pointing Prometheus at it so you can query real host metrics.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
+  <Step title="Install node_exporter">
+    If you haven't installed node exporter yet, download the latest binary for your platform:
 
-### Step 1: Set up your local environment
+    ```bash
+    curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.10.2/node_exporter-1.10.2.linux-amd64.tar.gz
+    tar xvf node_exporter-1.10.2.linux-amd64.tar.gz
+    cd node_exporter-1.10.2.linux-amd64
+    ```
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    See the [installation page](/installation) for other platforms and architectures, or for instructions on building from source.
+  </Step>
+  <Step title="Start node_exporter">
+    Run the binary with no arguments to start with all default collectors enabled:
 
-### Step 2: Deploy your changes
+    ```bash
+    ./node_exporter
+    ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    You should see startup output similar to:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```
+    ts=2025-10-25T00:00:00.000Z caller=node_exporter.go:217 level=info msg="Starting node_exporter" version="..."
+    ts=2025-10-25T00:00:00.000Z caller=node_exporter.go:218 level=info msg="Build context" build_context="..."
+    ts=2025-10-25T00:00:00.000Z caller=node_exporter.go:136 level=info msg="Enabled collectors"
+    ts=2025-10-25T00:00:00.000Z caller=node_exporter.go:143 level=info collector=arp
+    ts=2025-10-25T00:00:00.000Z caller=node_exporter.go:143 level=info collector=bcache
+    ...
+    ```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    Node exporter listens on port `9100` by default. To use a different port:
 
-### Step 3: Go live
+    ```bash
+    ./node_exporter --web.listen-address=":9200"
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    <Note>
+      Node exporter is designed to run as an unprivileged user. You do not need root access for the default collector set. The process will warn you if started as root.
+    </Note>
+  </Step>
+  <Step title="Verify the metrics endpoint">
+    With node exporter running, confirm it is serving metrics:
+
+    ```bash
+    curl http://localhost:9100/metrics
+    ```
+
+    You should see thousands of lines of metrics in the Prometheus text format. Here are a few examples of what you'll find:
+
+    ```
+    # HELP node_cpu_seconds_total Seconds the CPUs spent in each mode.
+    # TYPE node_cpu_seconds_total counter
+    node_cpu_seconds_total{cpu="0",mode="idle"} 12345.67
+    node_cpu_seconds_total{cpu="0",mode="system"} 234.56
+    node_cpu_seconds_total{cpu="0",mode="user"} 567.89
+
+    # HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
+    # TYPE node_memory_MemTotal_bytes gauge
+    node_memory_MemTotal_bytes 1.6742952960e+10
+
+    # HELP node_filesystem_avail_bytes Filesystem space available to non-root users in bytes.
+    # TYPE node_filesystem_avail_bytes gauge
+    node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/"} 4.5097814016e+10
+
+    # HELP node_load1 1m load average.
+    # TYPE node_load1 gauge
+    node_load1 0.42
+    ```
+
+    To quickly check a single metric by name:
+
+    ```bash
+    curl -s http://localhost:9100/metrics | grep node_memory_MemTotal_bytes
+    ```
+  </Step>
+  <Step title="Configure Prometheus to scrape node_exporter">
+    Add a scrape job to your Prometheus configuration file (`prometheus.yml`):
+
+    ```yaml
+    scrape_configs:
+      - job_name: "node"
+        static_configs:
+          - targets: ["localhost:9100"]
+    ```
+
+    If you're monitoring multiple hosts, list all of them under `targets`:
+
+    ```yaml
+    scrape_configs:
+      - job_name: "node"
+        static_configs:
+          - targets:
+              - "host1.example.com:9100"
+              - "host2.example.com:9100"
+              - "host3.example.com:9100"
+    ```
+
+    Reload Prometheus after editing the configuration:
+
+    ```bash
+    curl -X POST http://localhost:9090/-/reload
+    ```
+
+    Or restart the Prometheus process if runtime reloading is not enabled.
+  </Step>
+  <Step title="Query metrics in Prometheus">
+    Open the Prometheus UI at `http://localhost:9090` and try these example queries in the expression browser.
+
+    **CPU usage across all cores (percentage)**
+
+    ```promql
+    100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+    ```
+
+    **Available memory in gigabytes**
+
+    ```promql
+    node_memory_MemAvailable_bytes / 1024 / 1024 / 1024
+    ```
+
+    **Disk space available on the root filesystem**
+
+    ```promql
+    node_filesystem_avail_bytes{mountpoint="/"}
+    ```
+
+    **Network receive rate in megabits per second**
+
+    ```promql
+    rate(node_network_receive_bytes_total[5m]) * 8 / 1024 / 1024
+    ```
+
+    You should see data points for each target in the `node` job you configured in the previous step.
+  </Step>
+</Steps>
+
+## Common options
+
+### Run with specific collectors only
+
+Use `--collector.disable-defaults` combined with explicit collector flags to collect only what you need:
+
+```bash
+./node_exporter \
+  --collector.disable-defaults \
+  --collector.cpu \
+  --collector.meminfo \
+  --collector.filesystem \
+  --collector.netdev
+```
+
+<Tip>
+  Disabling unused collectors reduces memory usage, scrape duration, and the number of time series stored in Prometheus. This is especially useful on high-cardinality systems or when you want to collect specific metrics from nodes using different Prometheus servers.
+</Tip>
+
+### Enable a disabled-by-default collector
+
+Some collectors are disabled by default because they can produce high cardinality or have performance implications. Enable them explicitly:
+
+```bash
+./node_exporter --collector.processes
+```
+
+```bash
+./node_exporter --collector.systemd
+```
+
+### Expose a textfile metrics directory
+
+The `textfile` collector lets you export custom or batch-job metrics by writing `.prom` files to a directory:
+
+```bash
+./node_exporter --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Collectors" icon="chart-bar" href="/collectors/overview">
+    Browse the full list of collectors and the metrics each one exposes.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/flags">
+    All command-line flags for tuning node_exporter behavior.
+  </Card>
+  <Card title="systemd deployment" icon="server" href="/deployment/systemd">
+    Run node_exporter as a managed system service.
+  </Card>
+  <Card title="Prometheus integration" icon="chart-line" href="/operations/prometheus-integration">
+    Scrape config patterns, relabeling, and recording rules.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

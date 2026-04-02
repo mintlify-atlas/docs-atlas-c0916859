@@ -1,0 +1,122 @@
+---
+title: "Collectors Overview"
+description: "Pluggable modules that gather categories of system metrics from the host OS and hardware."
+---
+
+Collectors are the pluggable modules that power node_exporter. Each collector is responsible for gathering a specific category of metrics — CPU statistics, filesystem usage, network throughput, and so on — and feeding them into the Prometheus registry on every scrape.
+
+## The Collector interface
+
+Every collector implements a single Go interface defined in `collector/collector.go`:
+
+```go
+type Collector interface {
+    // Get new metrics and expose them via prometheus registry.
+    Update(ch chan<- prometheus.Metric) error
+}
+```
+
+The `Update` method is called once per scrape. It reads data from the OS or hardware and writes `prometheus.Metric` values to the channel `ch`. Returning a non-nil error marks the collector as failed for that scrape cycle.
+
+## Metrics namespace
+
+All metrics produced by node_exporter share the `node` namespace, declared as a package-level constant:
+
+```go
+const namespace = "node"
+```
+
+This means every metric name starts with `node_`, for example `node_cpu_seconds_total` or `node_filesystem_size_bytes`.
+
+## Registering collectors
+
+Each collector registers itself at startup using `registerCollector()`:
+
+```go
+func registerCollector(
+    collector string,
+    isDefaultEnabled bool,
+    factory func(logger *slog.Logger) (Collector, error),
+)
+```
+
+The `collector` string becomes the name used in flags and metric labels. The `isDefaultEnabled` boolean determines whether the collector runs without any explicit configuration. The `factory` function constructs the collector instance.
+
+For example, the CPU collector registers itself as:
+
+```go
+func init() {
+    registerCollector("cpu", defaultEnabled, NewCPUCollector)
+}
+```
+
+## Enabling and disabling collectors
+
+Collectors are controlled with command-line flags:
+
+| Goal | Flag |
+|------|------|
+| Enable a disabled-by-default collector | `--collector.<name>` |
+| Disable a default collector | `--no-collector.<name>` |
+| Disable all defaults, then opt in | `--collector.disable-defaults --collector.<name> ...` |
+
+**Examples:**
+
+```bash
+# Enable the systemd collector (disabled by default)
+./node_exporter --collector.systemd
+
+# Disable the default mdadm collector
+./node_exporter --no-collector.mdadm
+
+# Start clean, enable only cpu and meminfo
+./node_exporter --collector.disable-defaults --collector.cpu --collector.meminfo
+```
+
+<Note>
+Using `--collector.disable-defaults` is useful in environments where you want precise control over which metrics are collected and want to avoid the overhead of collectors you don't use.
+</Note>
+
+## Per-collector internal metrics
+
+For every enabled collector, node_exporter automatically records two diagnostic metrics:
+
+```
+node_scrape_collector_duration_seconds{collector="<name>"}
+```
+The time in seconds that the last scrape of this collector took.
+
+```
+node_scrape_collector_success{collector="<name>"}
+```
+`1` if the last scrape succeeded, `0` if it failed.
+
+These metrics are always present, regardless of what the collector itself produces. They are invaluable for detecting slow or failing collectors:
+
+```promql
+# Collectors that failed their last scrape
+node_scrape_collector_success == 0
+
+# Collectors taking more than 1 second
+node_scrape_collector_duration_seconds > 1
+```
+
+## Caution when enabling optional collectors
+
+<Warning>
+Disabled-by-default collectors are disabled for a reason. Some produce very high-cardinality metrics, some have long runtimes that may exceed your Prometheus `scrape_timeout`, and others place significant CPU or memory load on the host. Enable at most one new collector at a time, test first on a non-production system, and monitor `node_scrape_collector_duration_seconds` after each change.
+</Warning>
+
+## Explore collector categories
+
+<CardGroup cols={2}>
+  <Card title="Default Collectors" icon="circle-check" href="/collectors/enabled-by-default">
+    Collectors that run out of the box without any flags. Covers CPU, memory, filesystem, networking, and more.
+  </Card>
+  <Card title="Optional Collectors" icon="toggle-right" href="/collectors/disabled-by-default">
+    Collectors that must be explicitly enabled. Useful for advanced use cases but carry performance tradeoffs.
+  </Card>
+  <Card title="Textfile Collector" icon="file-text" href="/collectors/textfile">
+    Expose custom metrics from `.prom` files on disk. Ideal for batch jobs, cron tasks, and static machine labels.
+  </Card>
+</CardGroup>

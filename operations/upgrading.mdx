@@ -1,0 +1,219 @@
+---
+title: "Upgrading"
+description: "Upgrade node_exporter safely, including the major v0.16 metric rename and notes for recent 1.x releases."
+---
+
+## Current Version
+
+The latest stable release is **1.10.2** (released 2025-10-25). See the [CHANGELOG](https://github.com/prometheus/node_exporter/blob/master/CHANGELOG.md) for the full release history.
+
+## General Upgrade Procedure
+
+<Steps>
+  <Step title="Download the new binary">
+    Fetch the release archive for your platform from the [GitHub releases page](https://github.com/prometheus/node_exporter/releases):
+
+    ```bash
+    curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.10.2/node_exporter-1.10.2.linux-amd64.tar.gz
+    tar xzf node_exporter-1.10.2.linux-amd64.tar.gz
+    ```
+  </Step>
+  <Step title="Stop the running node_exporter">
+    ```bash
+    # systemd
+    sudo systemctl stop node_exporter
+
+    # Or send SIGTERM directly
+    sudo kill -SIGTERM $(pidof node_exporter)
+    ```
+  </Step>
+  <Step title="Replace the binary">
+    ```bash
+    sudo cp node_exporter-1.10.2.linux-amd64/node_exporter /usr/local/bin/node_exporter
+    sudo chmod +x /usr/local/bin/node_exporter
+    ```
+  </Step>
+  <Step title="Start node_exporter">
+    ```bash
+    sudo systemctl start node_exporter
+    sudo systemctl status node_exporter
+    ```
+  </Step>
+  <Step title="Verify the upgrade">
+    Confirm the new version is running and metrics are being scraped:
+
+    ```bash
+    curl -s http://localhost:9100/metrics | grep node_exporter_build_info
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+After any upgrade, monitor `scrape_duration_seconds` for the `node` job in Prometheus. A sudden increase may indicate that newly enabled collectors or metric cardinality changes are affecting scrape performance. You can query:
+
+```promql
+scrape_duration_seconds{job="node"}
+```
+</Tip>
+
+## Version-Specific Migration Guides
+
+<Accordion title="v0.16 — Major metric rename (breaking)">
+
+<Warning>
+The v0.16 release renamed a large number of metrics to conform with [Prometheus naming best practices](https://prometheus.io/docs/practices/naming/). Metrics gained `_total` suffixes for counters and explicit `_bytes`, `_seconds` units. **Existing dashboards, alerts, and recording rules that reference old metric names will break after upgrading.**
+</Warning>
+
+### What changed
+
+Metrics across many collectors were renamed. Examples include:
+
+| Old name | New name |
+|---|---|
+| `node_cpu` | `node_cpu_seconds_total` |
+| `node_memory_MemTotal` | `node_memory_MemTotal_bytes` |
+| `node_filesystem_size` | `node_filesystem_size_bytes` |
+| `node_disk_bytes_read` | `node_disk_read_bytes_total` |
+| `node_network_receive_bytes` | `node_network_receive_bytes_total` |
+| `node_boot_time` | `node_boot_time_seconds` |
+
+### Migration options
+
+**Option 1 — Update dashboards and alerts**
+
+Edit all Grafana dashboards and Prometheus alert rules to use the new metric names. Grafana supports adding multiple queries per panel, which lets you display both old and new data simultaneously during a transition period.
+
+**Option 2 — Use compatibility recording rules**
+
+The node_exporter repository ships two compatibility rule files. `example-16-compatibility-rules.yml` translates **old metric names to new ones** — useful when running the pre-0.16 exporter alongside Prometheus that expects new names. `example-16-compatibility-rules-new-to-old.yml` does the reverse — useful when you've upgraded the exporter but still have dashboards and alerts using old metric names:
+
+Load the appropriate file depending on your migration direction:
+
+```yaml prometheus.yml
+# If you upgraded node_exporter to 0.16+ but still have old-name dashboards:
+rule_files:
+  - /etc/prometheus/rules/example-16-compatibility-rules-new-to-old.yml
+```
+
+A sample of what `example-16-compatibility-rules-new-to-old.yml` looks like (new names → old names):
+
+```yaml example-16-compatibility-rules-new-to-old.yml
+groups:
+  - name: node_exporter-16-cpu
+    rules:
+      - record: node_cpu
+        expr: label_replace(node_cpu_seconds_total, "cpu", "cpu$1", "cpu", "(.+)")
+
+  - name: node_exporter-16-filesystem
+    rules:
+      - record: node_filesystem_free
+        expr: node_filesystem_free_bytes
+      - record: node_filesystem_avail
+        expr: node_filesystem_avail_bytes
+      - record: node_filesystem_size
+        expr: node_filesystem_size_bytes
+
+  - name: node_exporter-16-memory
+    rules:
+      - record: node_memory_MemTotal
+        expr: node_memory_MemTotal_bytes
+      - record: node_memory_MemAvailable
+        expr: node_memory_MemAvailable_bytes
+      - record: node_memory_MemFree
+        expr: node_memory_MemFree_bytes
+      # ... (full file covers bcache, buddyinfo, diskstats, infiniband,
+      #      interrupts, network, nfs, stat, textfile, and more)
+```
+
+<Note>
+The compatibility rules approach creates extra time series and slightly re-aligns timestamps. It is intended as a temporary bridge, not a permanent solution.
+</Note>
+
+**Option 3 — Run both versions simultaneously**
+
+Run the old and new node_exporter on different ports and configure two separate Prometheus scrape jobs. Enable only the collectors that have name changes you care about on the old instance to minimize overhead.
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'node-new'
+    static_configs:
+      - targets: ['localhost:9100']
+
+  - job_name: 'node-legacy'
+    static_configs:
+      - targets: ['localhost:9101']  # old node_exporter instance
+```
+
+</Accordion>
+
+<Accordion title="v1.9 — Logging and meminfo changes">
+
+Released **2025-02-17**.
+
+**Breaking changes:**
+
+- `meminfo`: Linux implementation converted to use the `procfs` library — metric names are unchanged but the parsing backend changed. Verify meminfo metrics look correct after upgrade.
+- Logging now uses Go's standard `log/slog` package. Log output format may differ slightly from previous releases.
+
+**Notable additions:**
+
+- `exclude[]` URL parameter added — you can now filter out collectors per-scrape in addition to the existing `collect[]` parameter.
+- New `node_filesystem_mount_info` metric.
+- Interrupt collector now supports include/exclude filtering.
+- AIX platform support added.
+
+</Accordion>
+
+<Accordion title="v1.10 — mdadm sysfs and new collectors">
+
+Released **2025-10-24** (with patch releases 1.10.1 and 1.10.2 on 2025-10-25).
+
+**Breaking changes:**
+
+- `mdadm`: RAID metrics now sourced from sysfs instead of `/proc/mdstat`. Metric values should be equivalent but verify your mdadm dashboards after upgrade.
+- `filesystem`: `erofs` filesystem type added to the default exclusion list. If you were monitoring erofs filesystems, add them back explicitly with `--collector.filesystem.fs-types-include`.
+- `tcpstat`: Updated to use `binary.NativeEndian` from the Go standard library.
+
+**Notable additions:**
+
+- New `pcidevice` collector for PCIe device metrics.
+- New `swaps` collector (swap partition information).
+- `systemd` collector gains virtualization metrics.
+
+**Bug fixes of note (1.10.1/1.10.2):**
+
+- `filesystem`: Fixed mount points being collected multiple times.
+- `meminfo`: Fixed a typo in the Zswap metric name — if you have alerts on `node_memory_Zswap_bytes`, verify the metric name is correct after upgrading to 1.10.2.
+
+</Accordion>
+
+<Accordion title="v1.8 — New collectors and label changes">
+
+Released **2024-04-24**.
+
+**Breaking changes:**
+
+- `exec_bsd`: Labels changed for the `vm.stats.sys.v_syscall` sysctl metric.
+- `diskstats`: zram devices are now ignored on Linux by default.
+- `textfile`: Inconsistent help text is now rejected — textfile `.prom` files with conflicting `# HELP` lines for the same metric name will cause collection errors.
+
+**Notable additions:**
+
+- New `xfrm` collector for IPsec transform statistics.
+- New `watchdog` collector.
+- `os` collector gains support-end date parsing.
+
+</Accordion>
+
+## Breaking Changes Summary
+
+| Version | Area | Change |
+|---|---|---|
+| 0.16 | All collectors | Mass metric rename: units added (`_bytes`, `_seconds`), counters get `_total` suffix |
+| 1.6 | cpu | Metrics for offline CPUs removed |
+| 1.6 | bcache | `cache_readaheads_totals` metric removed |
+| 1.8 | diskstats | zram devices ignored by default |
+| 1.8 | textfile | Inconsistent HELP text rejected |
+| 1.9 | meminfo | Backend changed to procfs library |
+| 1.10 | mdadm | Source changed from procfs to sysfs |
+| 1.10 | filesystem | erofs added to default exclude list |

@@ -1,0 +1,200 @@
+---
+title: "Default Collectors"
+description: "Collectors that are active without any configuration flags, covering the most common Linux and Unix system metrics."
+---
+
+These collectors are enabled automatically when you start node_exporter without any flags. They cover the metrics that are useful on virtually every system.
+
+<Note>
+To disable any default collector, pass `--no-collector.<name>`. For example, to disable the `mdadm` collector on a system without software RAID:
+
+```bash
+./node_exporter --no-collector.mdadm
+```
+</Note>
+
+## System
+
+| Name | Description | OS |
+|------|-------------|----|
+| `arp` | ARP statistics from `/proc/net/arp` | Linux |
+| `boottime` | System boot time from the `kern.boottime` sysctl | Darwin, Dragonfly, FreeBSD, NetBSD, OpenBSD, Solaris |
+| `conntrack` | Conntrack statistics from `/proc/sys/net/netfilter/` (no-op if absent) | Linux |
+| `cpu` | CPU statistics | Darwin, Dragonfly, FreeBSD, Linux, Solaris, OpenBSD |
+| `cpufreq` | CPU frequency statistics | Linux, Solaris |
+| `dmi` | Desktop Management Interface info from `/sys/class/dmi/id/` | Linux |
+| `edac` | Error detection and correction statistics | Linux |
+| `entropy` | Available entropy | Linux |
+| `exec` | Execution statistics | Dragonfly, FreeBSD |
+| `filefd` | File descriptor statistics from `/proc/sys/fs/file-nr` | Linux |
+| `loadavg` | Load average | Darwin, Dragonfly, FreeBSD, Linux, NetBSD, OpenBSD, Solaris |
+| `meminfo` | Memory statistics | Darwin, Dragonfly, FreeBSD, Linux, OpenBSD |
+| `os` | OS release info from `/etc/os-release` or `/usr/lib/os-release` | Any |
+| `pressure` | Pressure stall statistics from `/proc/pressure/` (kernel 4.20+) | Linux |
+| `schedstat` | Task scheduler statistics from `/proc/schedstat` | Linux |
+| `selinux` | SELinux statistics | Linux |
+| `stat` | Various statistics from `/proc/stat` including boot time, forks, interrupts | Linux |
+| `time` | Current system time | Any |
+| `timex` | Selected `adjtimex(2)` system call stats | Linux |
+| `uname` | System information from the `uname` system call | Darwin, FreeBSD, Linux, OpenBSD |
+| `vmstat` | Statistics from `/proc/vmstat` | Linux |
+
+## Storage
+
+| Name | Description | OS |
+|------|-------------|----|
+| `bcache` | bcache statistics from `/sys/fs/bcache/` | Linux |
+| `btrfs` | Btrfs statistics | Linux |
+| `diskstats` | Disk I/O statistics | Darwin, Linux, OpenBSD |
+| `fibrechannel` | Fibre channel information and statistics from `/sys/class/fc_host/` | Linux |
+| `filesystem` | Filesystem statistics such as disk space used | Darwin, Dragonfly, FreeBSD, Linux, OpenBSD |
+| `mdadm` | Statistics about devices in `/proc/mdstat` (no-op if absent) | Linux |
+| `nvme` | NVMe info from `/sys/class/nvme/` | Linux |
+| `rapl` | Power statistics from `/sys/class/powercap` | Linux |
+| `tapestats` | Statistics from `/sys/class/scsi_tape` | Linux |
+| `xfs` | XFS runtime statistics (kernel 4.4+) | Linux |
+| `zfs` | ZFS performance statistics | FreeBSD, Linux, Solaris |
+
+## Network
+
+| Name | Description | OS |
+|------|-------------|----|
+| `infiniband` | Network statistics for InfiniBand and Intel OmniPath | Linux |
+| `ipvs` | IPVS status from `/proc/net/ip_vs` and stats from `/proc/net/ip_vs_stats` | Linux |
+| `netclass` | Network interface info from `/sys/class/net/` | Linux |
+| `netdev` | Network interface statistics such as bytes transferred | Darwin, Dragonfly, FreeBSD, Linux, OpenBSD |
+| `netisr` | netisr statistics | FreeBSD |
+| `netstat` | Network statistics from `/proc/net/netstat` (equivalent to `netstat -s`) | Linux |
+| `nfs` | NFS client statistics from `/proc/net/rpc/nfs` (equivalent to `nfsstat -c`) | Linux |
+| `nfsd` | NFS kernel server statistics from `/proc/net/rpc/nfsd` (equivalent to `nfsstat -s`) | Linux |
+| `sockstat` | Various statistics from `/proc/net/sockstat` | Linux |
+| `softnet` | Statistics from `/proc/net/softnet_stat` | Linux |
+| `udp_queues` | UDP `rx_queue` and `tx_queue` lengths from `/proc/net/udp` and `/proc/net/udp6` | Linux |
+
+## Hardware / Other
+
+| Name | Description | OS |
+|------|-------------|----|
+| `bonding` | Number of configured and active slaves of Linux bonding interfaces | Linux |
+| `hwmon` | Hardware monitoring and sensor data from `/sys/class/hwmon/` | Linux |
+| `powersupplyclass` | Power supply statistics from `/sys/class/power_supply` | Linux |
+| `thermal` | Thermal statistics from `pmset -g therm` | Darwin |
+| `thermal_zone` | Thermal zone and cooling device statistics from `/sys/class/thermal` | Linux |
+| `watchdog` | Statistics from `/sys/class/watchdog` | Linux |
+
+---
+
+## Key metrics reference
+
+The following sections highlight the most important metrics produced by the most commonly queried collectors.
+
+### cpu
+
+Source: `/proc/stat` on Linux.
+
+```
+node_cpu_seconds_total{cpu="0", mode="idle"}
+node_cpu_seconds_total{cpu="0", mode="iowait"}
+node_cpu_seconds_total{cpu="0", mode="irq"}
+node_cpu_seconds_total{cpu="0", mode="nice"}
+node_cpu_seconds_total{cpu="0", mode="softirq"}
+node_cpu_seconds_total{cpu="0", mode="steal"}
+node_cpu_seconds_total{cpu="0", mode="system"}
+node_cpu_seconds_total{cpu="0", mode="user"}
+node_cpu_guest_seconds_total{cpu="0", mode="nice"}
+node_cpu_guest_seconds_total{cpu="0", mode="user"}
+```
+
+The `cpu` label is the zero-indexed logical CPU number. The `mode` label maps to the corresponding `/proc/stat` field.
+
+**Commonly used PromQL:**
+
+```promql
+# Per-CPU utilisation (excluding idle)
+1 - rate(node_cpu_seconds_total{mode="idle"}[5m])
+
+# Overall average CPU usage across all cores
+1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) by (instance)
+```
+
+Additional optional metrics (disabled by default within the collector):
+- `node_cpu_info` — static info per logical CPU from `/proc/cpuinfo`, enabled with `--collector.cpu.info`
+- `node_cpu_core_throttles_total` — thermal throttle count per core
+- `node_cpu_package_throttles_total` — thermal throttle count per package
+
+### meminfo
+
+Source: `/proc/meminfo` on Linux.
+
+```
+node_memory_MemTotal_bytes
+node_memory_MemFree_bytes
+node_memory_MemAvailable_bytes
+node_memory_Buffers_bytes
+node_memory_Cached_bytes
+node_memory_SwapTotal_bytes
+node_memory_SwapFree_bytes
+node_memory_Active_bytes
+node_memory_Inactive_bytes
+```
+
+**Commonly used PromQL:**
+
+```promql
+# Memory used (excluding buffers/cache)
+node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
+
+# Memory used percentage
+(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100
+```
+
+### filesystem
+
+Source: `statfs(2)` system call, mount table from `/proc/1/mountinfo`.
+
+```
+node_filesystem_size_bytes{device="/dev/sda1", fstype="ext4", mountpoint="/"}
+node_filesystem_free_bytes{device="/dev/sda1", fstype="ext4", mountpoint="/"}
+node_filesystem_avail_bytes{device="/dev/sda1", fstype="ext4", mountpoint="/"}
+node_filesystem_files{device="/dev/sda1", fstype="ext4", mountpoint="/"}
+node_filesystem_files_free{device="/dev/sda1", fstype="ext4", mountpoint="/"}
+node_filesystem_readonly{device="/dev/sda1", fstype="ext4", mountpoint="/"}
+node_filesystem_device_error{device="/dev/sda1", fstype="ext4", mountpoint="/"}
+```
+
+By default, virtual and container filesystems are excluded. The exclusion is controlled by `--collector.filesystem.mount-points-exclude` and `--collector.filesystem.fs-types-exclude` flags.
+
+**Commonly used PromQL:**
+
+```promql
+# Disk usage percentage per mountpoint
+(1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100
+
+# Filesystems with less than 10% space remaining
+node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1
+```
+
+### netdev
+
+Source: `/proc/net/dev` on Linux.
+
+```
+node_network_receive_bytes_total{device="eth0"}
+node_network_transmit_bytes_total{device="eth0"}
+node_network_receive_packets_total{device="eth0"}
+node_network_transmit_packets_total{device="eth0"}
+node_network_receive_errs_total{device="eth0"}
+node_network_transmit_errs_total{device="eth0"}
+node_network_receive_drop_total{device="eth0"}
+node_network_transmit_drop_total{device="eth0"}
+```
+
+**Commonly used PromQL:**
+
+```promql
+# Inbound throughput in bytes/sec per interface
+rate(node_network_receive_bytes_total[5m])
+
+# Network errors per second
+rate(node_network_receive_errs_total[5m]) + rate(node_network_transmit_errs_total[5m])
+```

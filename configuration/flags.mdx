@@ -1,0 +1,137 @@
+---
+title: "CLI Flags Reference"
+description: "Complete reference for all node_exporter command-line flags, grouped by category."
+---
+
+<Note>
+  This page documents the most common flags. Run `./node_exporter -h` to see the full list of flags available in your installed version, including all per-collector flags registered at startup.
+</Note>
+
+## Web / HTTP
+
+<ParamField path="--web.listen-address" type="string" default=":9100">
+  Address on which to expose metrics and the web interface. Provided by
+  exporter-toolkit. Accepts `host:port` or just `:port`.
+</ParamField>
+
+<ParamField path="--web.telemetry-path" type="string" default="/metrics">
+  URL path under which to expose the Prometheus metrics endpoint.
+</ParamField>
+
+<ParamField path="--web.config.file" type="string" default="">
+  Path to a web configuration file for TLS and HTTP basic authentication.
+  See [TLS and Authentication](/configuration/tls-authentication) for the
+  file format.
+</ParamField>
+
+<ParamField path="--web.disable-exporter-metrics" type="boolean" default="false">
+  Exclude metrics about the exporter itself from the `/metrics` output.
+  When set, the following metric families are omitted:
+  - `promhttp_*`
+  - `process_*`
+  - `go_*`
+</ParamField>
+
+<ParamField path="--web.max-requests" type="integer" default="40">
+  Maximum number of parallel scrape requests the HTTP handler will accept.
+  Set to `0` to disable the limit entirely.
+</ParamField>
+
+## Collector control
+
+<ParamField path="--collector.<name>" type="boolean">
+  Enable a specific collector. For collectors that are disabled by default,
+  pass this flag to opt in. Example: `--collector.systemd`.
+</ParamField>
+
+<ParamField path="--no-collector.<name>" type="boolean">
+  Disable a specific collector that is enabled by default. Example:
+  `--no-collector.arp`.
+</ParamField>
+
+<ParamField path="--collector.disable-defaults" type="boolean" default="false">
+  Set all collectors to disabled at startup. Use this together with explicit
+  `--collector.<name>` flags to run only a curated set of collectors.
+
+  ```bash
+  ./node_exporter \
+    --collector.disable-defaults \
+    --collector.cpu \
+    --collector.meminfo \
+    --collector.filesystem
+  ```
+</ParamField>
+
+## Filesystem / container paths
+
+<ParamField path="--path.rootfs" type="string" default="/">
+  Prefix path that node_exporter prepends when accessing the host filesystem.
+  Required when running inside a container with the host root bind-mounted.
+  The mount point inside the container must match this value.
+
+  ```bash
+  docker run -d \
+    --net="host" \
+    --pid="host" \
+    -v "/:/host:ro,rslave" \
+    quay.io/prometheus/node-exporter:latest \
+    --path.rootfs=/host
+  ```
+</ParamField>
+
+## Runtime
+
+<ParamField path="--runtime.gomaxprocs" type="integer" default="1">
+  The target number of OS threads that the Go runtime will use simultaneously
+  (`GOMAXPROCS`). Can also be set via the `GOMAXPROCS` environment variable.
+  The flag takes precedence over the environment variable.
+</ParamField>
+
+## Logging
+
+<ParamField path="--log.level" type="string" default="info">
+  Minimum log level to emit. Accepted values: `debug`, `info`, `warn`, `error`.
+</ParamField>
+
+<ParamField path="--log.format" type="string" default="logfmt">
+  Output format for log lines. Accepted values: `logfmt`, `json`.
+</ParamField>
+
+## Per-collector include / exclude flags
+
+Many collectors accept additional flags to filter which devices, interfaces,
+or other items they collect. The general pattern is:
+
+```
+--collector.<name>.<scope>-include=<regex>
+--collector.<name>.<scope>-exclude=<regex>
+```
+
+Include and exclude flags are **mutually exclusive** on any collector that
+supports both. The include flag means "collect only these", while the exclude
+flag means "collect all except these".
+
+| Collector | Scope | Include flag | Exclude flag |
+|-----------|-------|--------------|--------------|
+| `arp` | device | `--collector.arp.device-include` | `--collector.arp.device-exclude` |
+| `cpu` | bugs | `--collector.cpu.info.bugs-include` | — |
+| `cpu` | flags | `--collector.cpu.info.flags-include` | — |
+| `diskstats` | device | `--collector.diskstats.device-include` | `--collector.diskstats.device-exclude` |
+| `ethtool` | device | `--collector.ethtool.device-include` | `--collector.ethtool.device-exclude` |
+| `ethtool` | metrics | `--collector.ethtool.metrics-include` | — |
+| `filesystem` | fs-types | `--collector.filesystem.fs-types-include` | `--collector.filesystem.fs-types-exclude` |
+| `filesystem` | mount-points | `--collector.filesystem.mount-points-include` | `--collector.filesystem.mount-points-exclude` |
+| `hwmon` | chip | `--collector.hwmon.chip-include` | `--collector.hwmon.chip-exclude` |
+| `hwmon` | sensor | `--collector.hwmon.sensor-include` | `--collector.hwmon.sensor-exclude` |
+| `interrupts` | name | `--collector.interrupts.name-include` | `--collector.interrupts.name-exclude` |
+| `netdev` | device | `--collector.netdev.device-include` | `--collector.netdev.device-exclude` |
+| `qdisc` | device | `--collector.qdisc.device-include` | `--collector.qdisc.device-exclude` |
+| `slabinfo` | slab-names | `--collector.slabinfo.slabs-include` | `--collector.slabinfo.slabs-exclude` |
+| `sysctl` | keys | `--collector.sysctl.include` | — |
+| `systemd` | unit | `--collector.systemd.unit-include` | `--collector.systemd.unit-exclude` |
+
+Flag values are Go regular expressions. Example:
+
+```bash
+--collector.filesystem.mount-points-exclude='^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)'
+```

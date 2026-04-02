@@ -1,97 +1,68 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Prometheus Node Exporter"
+description: "Prometheus exporter for hardware and OS metrics exposed by *NIX kernels, with pluggable metric collectors."
 ---
 
-## Setting up
+Prometheus Node Exporter collects system-level metrics from Linux and other Unix-like operating systems and exposes them in the Prometheus exposition format. It runs as a lightweight daemon on each host you want to monitor, serving metrics on port 9100 by default.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install node_exporter on Linux, macOS, FreeBSD, or via package managers.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get metrics flowing to Prometheus in under five minutes.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Collectors" icon="chart-bar" href="/collectors/overview">
+    Explore 60+ built-in metric collectors for CPU, memory, disk, and network.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Configuration" icon="gear" href="/configuration/flags">
+    Configure flags, TLS, authentication, and per-collector options.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What node_exporter collects
 
-Everything you need to create world-class documentation.
+Node exporter exposes metrics about the underlying host, not the container it runs in. It reads from `/proc`, `/sys`, and other kernel interfaces to provide metrics covering:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+- **CPU** — usage, frequency, per-core stats, vulnerability info
+- **Memory** — utilization, swap, NUMA topology
+- **Disk** — I/O stats, filesystem usage, NVMe and hardware monitoring
+- **Network** — interface stats, conntrack, netstat, network routes
+- **System** — load average, uptime, systemd unit status, entropy
 
-## Need inspiration?
+## How it works
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+Node exporter runs a single HTTP server. Prometheus scrapes the `/metrics` endpoint at a configurable interval to collect all enabled collectors' output.
+
+```
+Prometheus ──scrape /metrics──► node_exporter :9100 ──read──► /proc, /sys
+```
+
+<Steps>
+  <Step title="Install node_exporter on each host">
+    Download the binary or use a package manager to deploy node_exporter.
+  </Step>
+  <Step title="Start the exporter">
+    Run `./node_exporter` — it listens on `:9100` and serves metrics at `/metrics`.
+  </Step>
+  <Step title="Add a scrape config to Prometheus">
+    Point your Prometheus instance at each node_exporter instance.
+  </Step>
+  <Step title="Build dashboards and alerts">
+    Use the collected metrics in Grafana dashboards and Prometheus alerting rules.
+  </Step>
+</Steps>
+
+## Deployment options
+
+<CardGroup cols={3}>
+  <Card title="Docker" icon="docker" href="/deployment/docker">
+    Run in a container with host namespace access.
+  </Card>
+  <Card title="systemd" icon="server" href="/deployment/systemd">
+    Manage as a system service with automatic restarts.
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra" href="/deployment/kubernetes">
+    Deploy as a DaemonSet across your cluster nodes.
+  </Card>
+</CardGroup>

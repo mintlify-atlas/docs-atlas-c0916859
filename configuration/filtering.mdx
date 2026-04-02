@@ -1,0 +1,199 @@
+---
+title: "Metric Filtering"
+description: "Control which collectors and metrics node_exporter exposes using URL parameters or startup flags."
+---
+
+Node exporter provides two complementary mechanisms for filtering metrics:
+
+- **URL parameters** — filter collectors per individual scrape request.
+- **Startup flags** — include or exclude specific devices, interfaces, or
+  other items within a collector at process startup.
+
+<Tabs>
+  <Tab title="URL parameters">
+
+## Per-request filtering with URL parameters
+
+The `collect[]` and `exclude[]` query parameters let a Prometheus server
+request a specific subset of collectors on each scrape, without restarting
+node_exporter. This is useful when multiple Prometheus servers share a single
+node_exporter instance and each server only needs certain metrics.
+
+<Note>
+  `collect[]` and `exclude[]` cannot be combined in the same request. Doing
+  so returns HTTP 400.
+</Note>
+
+### collect[] — allow-list mode
+
+Include **only** the listed collectors in the response.
+
+```
+GET /metrics?collect[]=cpu&collect[]=meminfo
+```
+
+### exclude[] — deny-list mode
+
+Include all enabled collectors **except** the listed ones.
+
+```
+GET /metrics?exclude[]=netdev
+```
+
+### Using parameters in Prometheus scrape config
+
+Pass the parameters via the `params` key in your `scrape_config`. The `[]`
+suffix is part of the parameter name and must be included.
+
+<CodeGroup>
+
+```yaml Collect only cpu and meminfo
+scrape_configs:
+  - job_name: node_reduced
+    static_configs:
+      - targets: ['node-host:9100']
+    params:
+      collect[]:
+        - cpu
+        - meminfo
+```
+
+```yaml Exclude netdev
+scrape_configs:
+  - job_name: node_no_netdev
+    static_configs:
+      - targets: ['node-host:9100']
+    params:
+      exclude[]:
+        - netdev
+```
+
+```yaml Multiple Prometheus servers, different collectors
+scrape_configs:
+  - job_name: node_compute_metrics
+    static_configs:
+      - targets: ['node-host:9100']
+    params:
+      collect[]:
+        - cpu
+        - loadavg
+        - meminfo
+        - vmstat
+
+  - job_name: node_network_metrics
+    static_configs:
+      - targets: ['node-host:9100']
+    params:
+      collect[]:
+        - netdev
+        - netstat
+        - sockstat
+```
+
+</CodeGroup>
+
+<Note>
+  URL parameter filtering only works with collectors that are already enabled.
+  You cannot use `collect[]` to enable a collector that was disabled at
+  startup.
+</Note>
+
+  </Tab>
+  <Tab title="Startup flags">
+
+## Per-collector include / exclude flags
+
+Several collectors accept flags to filter which devices, mount points, or
+other scoped items they report. These filters are applied at startup and
+remain in effect for the lifetime of the process.
+
+- **Include flag** — collect **only** items matching the regex.
+- **Exclude flag** — collect all items **except** those matching the regex.
+
+<Warning>
+  Include and exclude flags are mutually exclusive within a given collector
+  scope. Setting both for the same scope is not supported.
+</Warning>
+
+### Flag naming convention
+
+```
+--collector.<name>.<scope>-include=<regex>
+--collector.<name>.<scope>-exclude=<regex>
+```
+
+Values are Go regular expressions anchored at the start by default; use `$`
+to anchor the end.
+
+### Supported collectors and scopes
+
+| Collector | Scope | Include flag | Exclude flag |
+|-----------|-------|--------------|--------------|
+| `arp` | device | `--collector.arp.device-include` | `--collector.arp.device-exclude` |
+| `cpu` | bugs | `--collector.cpu.info.bugs-include` | — |
+| `cpu` | flags | `--collector.cpu.info.flags-include` | — |
+| `diskstats` | device | `--collector.diskstats.device-include` | `--collector.diskstats.device-exclude` |
+| `ethtool` | device | `--collector.ethtool.device-include` | `--collector.ethtool.device-exclude` |
+| `ethtool` | metrics | `--collector.ethtool.metrics-include` | — |
+| `filesystem` | fs-types | `--collector.filesystem.fs-types-include` | `--collector.filesystem.fs-types-exclude` |
+| `filesystem` | mount-points | `--collector.filesystem.mount-points-include` | `--collector.filesystem.mount-points-exclude` |
+| `hwmon` | chip | `--collector.hwmon.chip-include` | `--collector.hwmon.chip-exclude` |
+| `hwmon` | sensor | `--collector.hwmon.sensor-include` | `--collector.hwmon.sensor-exclude` |
+| `interrupts` | name | `--collector.interrupts.name-include` | `--collector.interrupts.name-exclude` |
+| `netdev` | device | `--collector.netdev.device-include` | `--collector.netdev.device-exclude` |
+| `qdisc` | device | `--collector.qdisc.device-include` | `--collector.qdisc.device-exclude` |
+| `slabinfo` | slab-names | `--collector.slabinfo.slabs-include` | `--collector.slabinfo.slabs-exclude` |
+| `sysctl` | keys | `--collector.sysctl.include` | — |
+| `systemd` | unit | `--collector.systemd.unit-include` | `--collector.systemd.unit-exclude` |
+
+### Examples
+
+<CodeGroup>
+
+```bash Exclude virtual and container filesystems
+./node_exporter \
+  --collector.filesystem.mount-points-exclude='^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)'
+```
+
+```bash Monitor only eth0 and eth1
+./node_exporter \
+  --collector.netdev.device-include='^eth[01]$'
+```
+
+```bash Exclude loopback from ARP stats
+./node_exporter \
+  --collector.arp.device-exclude='^lo$'
+```
+
+```bash Monitor only specific systemd units
+./node_exporter \
+  --collector.systemd \
+  --collector.systemd.unit-include='^(nginx|postgresql|node_exporter)\.service$'
+```
+
+</CodeGroup>
+
+  </Tab>
+</Tabs>
+
+## Combining both mechanisms
+
+URL parameter filtering and per-collector include/exclude flags operate at
+different levels and can be used together:
+
+1. Startup flags reduce what each collector *reports* (e.g., only certain
+   network interfaces).
+2. URL parameters reduce which collectors are *invoked* per request.
+
+For example, you could restrict the `netdev` collector to physical interfaces
+at startup, and then use `exclude[]=netdev` in a Prometheus job that has no
+interest in network data at all.
+
+## Choosing between the two approaches
+
+| Concern | URL parameters | Startup flags |
+|---------|----------------|---------------|
+| Change without restart | Yes | No |
+| Granularity | Per-collector | Per item within a collector |
+| Multiple Prometheus servers with different needs | Yes | No |
+| Reduce cardinality from noisy devices | Limited | Yes |

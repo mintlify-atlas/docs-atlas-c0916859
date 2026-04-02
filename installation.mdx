@@ -1,0 +1,153 @@
+---
+title: "Installation"
+description: "Install node_exporter on Linux and other *NIX systems via pre-built binary or by building from source."
+---
+
+Node exporter is distributed as a single static binary with no runtime dependencies. Choose the method that fits your workflow.
+
+<Tabs>
+  <Tab title="Binary download">
+    Downloading a pre-built binary is the fastest way to get started. Pre-built binaries are available for Linux, macOS, FreeBSD, and other platforms from the GitHub releases page.
+
+    <Steps>
+      <Step title="Download the release archive">
+        Replace `ARCH` with your system architecture (`amd64`, `arm64`, `armv7`, `ppc64le`, or `s390x`).
+
+        <CodeGroup>
+
+        ```bash amd64
+        curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.10.2/node_exporter-1.10.2.linux-amd64.tar.gz
+        ```
+
+        ```bash arm64
+        curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.10.2/node_exporter-1.10.2.linux-arm64.tar.gz
+        ```
+
+        ```bash armv7
+        curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.10.2/node_exporter-1.10.2.linux-armv7.tar.gz
+        ```
+
+        ```bash ppc64le
+        curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.10.2/node_exporter-1.10.2.linux-ppc64le.tar.gz
+        ```
+
+        ```bash s390x
+        curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.10.2/node_exporter-1.10.2.linux-s390x.tar.gz
+        ```
+
+        </CodeGroup>
+      </Step>
+      <Step title="Extract the archive">
+        ```bash
+        tar xvf node_exporter-1.10.2.linux-amd64.tar.gz
+        cd node_exporter-1.10.2.linux-amd64
+        ```
+      </Step>
+      <Step title="Verify the binary">
+        ```bash
+        ./node_exporter --version
+        ```
+
+        Expected output:
+
+        ```
+        node_exporter, version 1.10.2 (branch: HEAD, revision: ...)
+          build user:       ...
+          build date:       ...
+          go version:       go1.25
+          platform:         linux/amd64
+        ```
+      </Step>
+      <Step title="(Optional) Install system-wide">
+        Move the binary to a directory on your `PATH` so it is available system-wide:
+
+        ```bash
+        sudo mv node_exporter /usr/local/bin/
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Build from source">
+    Building from source lets you compile node exporter for any platform supported by Go and ensures you are running exactly the code in the repository.
+
+    <Info>
+      **Prerequisites**
+
+      - [Go](https://golang.org/dl/) 1.25 or later
+      - On RHEL/CentOS: the `glibc-static` package is required for fully static builds
+      - `git`
+    </Info>
+
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/prometheus/node_exporter.git
+        cd node_exporter
+        ```
+      </Step>
+      <Step title="Build the binary">
+        The `Makefile` wraps the Go toolchain and sets version metadata via `ldflags`:
+
+        ```bash
+        make build
+        ```
+
+        This produces a `node_exporter` binary in the current directory. The build embeds version, revision, branch, build user, and build date into the binary.
+
+        <Tip>
+          To build without `make`, you can run `go build -o node_exporter .` directly, though version metadata will not be set.
+        </Tip>
+      </Step>
+      <Step title="Verify the binary">
+        ```bash
+        ./node_exporter --version
+        ```
+      </Step>
+      <Step title="Run the tests (optional)">
+        ```bash
+        make test
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Docker">
+    Node exporter is published to [Quay.io](https://quay.io/repository/prometheus/node-exporter) and [Docker Hub](https://hub.docker.com/r/prom/node-exporter).
+
+    <Warning>
+      Node exporter is designed to monitor the **host** system. When running inside a container, you must give it access to the host's namespaces and filesystem — otherwise it will report container-level metrics, not host metrics.
+    </Warning>
+
+    ```bash
+    docker run -d \
+      --net="host" \
+      --pid="host" \
+      -v "/:/host:ro,rslave" \
+      quay.io/prometheus/node-exporter:latest \
+      --path.rootfs=/host
+    ```
+
+    For Docker Compose:
+
+    ```yaml
+    services:
+      node_exporter:
+        image: quay.io/prometheus/node-exporter:latest
+        container_name: node_exporter
+        command:
+          - '--path.rootfs=/host'
+        network_mode: host
+        pid: host
+        restart: unless-stopped
+        volumes:
+          - '/:/host:ro,rslave'
+    ```
+
+    <Note>
+      Some collectors (such as `timex`) require `--cap-add=SYS_TIME` to access the necessary syscalls.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Next steps
+
+Once node exporter is installed, follow the [quick start](/quickstart) to start the process, verify the metrics endpoint, and configure Prometheus to scrape it.

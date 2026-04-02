@@ -1,0 +1,213 @@
+---
+title: "Prometheus Integration"
+description: "Configure Prometheus to scrape node_exporter metrics and write useful PromQL queries for system observability."
+---
+
+## Basic Scrape Configuration
+
+Node exporter listens on HTTP port `9100` by default. Add a scrape job to your Prometheus configuration to begin collecting host metrics.
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+```
+
+For multi-host environments, add all targets to the list:
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'node'
+    static_configs:
+      - targets:
+          - 'host1.example.com:9100'
+          - 'host2.example.com:9100'
+          - 'host3.example.com:9100'
+```
+
+## Service Discovery
+
+For dynamic infrastructure, use service discovery instead of static target lists.
+
+<CodeGroup>
+
+```yaml static_configs
+scrape_configs:
+  - job_name: 'node'
+    static_configs:
+      - targets:
+          - 'host1.example.com:9100'
+          - 'host2.example.com:9100'
+        labels:
+          env: production
+```
+
+```yaml file_sd
+scrape_configs:
+  - job_name: 'node'
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/targets/nodes/*.yml'
+        refresh_interval: 5m
+```
+
+```yaml kubernetes_sd
+scrape_configs:
+  - job_name: 'node'
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '(.*):.*'
+        target_label: __address__
+        replacement: '${1}:9100'
+```
+
+```yaml ec2_sd
+scrape_configs:
+  - job_name: 'node'
+    ec2_sd_configs:
+      - region: us-east-1
+        port: 9100
+    relabel_configs:
+      - source_labels: [__meta_ec2_tag_Name]
+        target_label: instance
+```
+
+</CodeGroup>
+
+### File-based Service Discovery Target File
+
+When using `file_sd_configs`, your target files should be formatted as YAML or JSON:
+
+```yaml /etc/prometheus/targets/nodes/prod.yml
+- targets:
+    - 'web1.prod.example.com:9100'
+    - 'web2.prod.example.com:9100'
+    - 'db1.prod.example.com:9100'
+  labels:
+    env: production
+    region: us-east-1
+```
+
+## Filtering Collectors with `collect[]` and `exclude[]`
+
+Node exporter supports per-scrape collector filtering via URL parameters. You can use the `params:` key in a Prometheus scrape config to control which collectors run for a given job. The `collect[]` and `exclude[]` parameters cannot be combined.
+
+**Collect only specific collectors:**
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'node-cpu-mem'
+    params:
+      collect[]:
+        - cpu
+        - meminfo
+    static_configs:
+      - targets: ['localhost:9100']
+```
+
+**Collect all enabled collectors except specific ones:**
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'node-no-netdev'
+    params:
+      exclude[]:
+        - netdev
+    static_configs:
+      - targets: ['localhost:9100']
+```
+
+This is useful when running multiple Prometheus servers that each collect a subset of metrics from the same node exporters.
+
+## Relabeling
+
+### Adding a Hostname Label
+
+Use relabeling to derive a human-readable `instance` label from the target hostname:
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'node'
+    static_configs:
+      - targets: ['host1.example.com:9100']
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+)(?::\d+)?'
+        target_label: instance
+        replacement: '$1'
+```
+
+### Preserving Source Labels with `honor_labels`
+
+<Tip>
+If your targets already set labels that overlap with Prometheus's own labels (for example, when using a federation setup or Pushgateway-style patterns), set `honor_labels: true` to preserve the target's labels rather than having them overwritten by Prometheus relabeling.
+</Tip>
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'node'
+    honor_labels: true
+    static_configs:
+      - targets: ['localhost:9100']
+```
+
+## Useful PromQL Queries
+
+### CPU Usage
+
+Percentage of CPU time that is **not** idle, averaged across all CPUs per instance:
+
+```promql
+1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) by (instance)
+```
+
+### Memory Available
+
+Fraction of total memory that is available (free + reclaimable):
+
+```promql
+node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+```
+
+### Disk Usage
+
+Fraction of disk space used per filesystem (excludes tmpfs and other virtual filesystems by default):
+
+```promql
+1 - (node_filesystem_avail_bytes / node_filesystem_size_bytes)
+```
+
+Filter to only real devices:
+
+```promql
+1 - (
+  node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|aufs|squashfs"}
+  /
+  node_filesystem_size_bytes{fstype!~"tmpfs|overlay|aufs|squashfs"}
+)
+```
+
+### Network Traffic
+
+Incoming bytes per second per network interface:
+
+```promql
+rate(node_network_receive_bytes_total[5m])
+```
+
+Outgoing bytes per second:
+
+```promql
+rate(node_network_transmit_bytes_total[5m])
+```
+
+### Load Average (Normalized)
+
+Load average normalized by CPU count — values above `1.0` indicate the system is overloaded:
+
+```promql
+node_load1 / count(node_cpu_seconds_total{mode="idle"}) without (cpu, mode)
+```

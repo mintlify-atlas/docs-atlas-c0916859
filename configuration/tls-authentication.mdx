@@ -1,0 +1,252 @@
+---
+title: "TLS and Authentication"
+description: "Configure TLS encryption and HTTP basic authentication for the node_exporter metrics endpoint."
+---
+
+<Warning>
+  TLS and authentication support is **experimental** and the configuration
+  format may change in a future release.
+</Warning>
+
+Node exporter delegates TLS and authentication to the
+[Prometheus exporter-toolkit](https://github.com/prometheus/exporter-toolkit).
+All configuration lives in a single YAML file passed at startup via
+`--web.config.file`.
+
+## Quick start
+
+<Steps>
+  <Step title="Generate a TLS certificate and key">
+    Use your organisation's PKI, a self-signed certificate, or a certificate
+    issued by a public CA. The certificate and key must be in PEM format.
+
+    ```bash
+    # Self-signed certificate for testing only
+    openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem \
+      -days 365 -nodes -subj '/CN=node-exporter'
+    ```
+  </Step>
+
+  <Step title="Create web-config.yml">
+    Create the web configuration file that references your certificate and key.
+
+    ```yaml web-config.yml
+    tls_server_config:
+      cert_file: /etc/node_exporter/cert.pem
+      key_file: /etc/node_exporter/key.pem
+    ```
+  </Step>
+
+  <Step title="Start node_exporter with the config file">
+    Pass the path to the web configuration file using the `--web.config.file`
+    flag.
+
+    ```bash
+    ./node_exporter --web.config.file=web-config.yml
+    ```
+  </Step>
+
+  <Step title="Verify the endpoint">
+    Scrape the metrics endpoint over HTTPS to confirm TLS is active.
+
+    ```bash
+    curl --cacert cert.pem https://localhost:9100/metrics
+    ```
+  </Step>
+</Steps>
+
+## web-config.yml format
+
+The configuration file is re-read on every HTTP request, so certificate
+rotations take effect immediately without a restart.
+
+<CodeGroup>
+
+```yaml TLS only
+tls_server_config:
+  # Path to PEM-encoded server certificate
+  cert_file: /etc/node_exporter/cert.pem
+  # Path to PEM-encoded server private key
+  key_file: /etc/node_exporter/key.pem
+
+  # Minimum TLS version (default: TLS12)
+  min_version: TLS12
+  # Maximum TLS version (default: TLS13)
+  max_version: TLS13
+```
+
+```yaml TLS with basic auth
+tls_server_config:
+  cert_file: /etc/node_exporter/cert.pem
+  key_file: /etc/node_exporter/key.pem
+  min_version: TLS12
+
+# Usernames and bcrypt-hashed passwords.
+# Any user listed here has full access to the metrics endpoint.
+basic_auth_users:
+  prometheus: $2y$10$X0h1gDsPszWURQaxFh.zoubFi6DXncSjhoQNJgRrnGs7EsimhC7zG
+```
+
+```yaml Mutual TLS (mTLS)
+tls_server_config:
+  cert_file: /etc/node_exporter/cert.pem
+  key_file: /etc/node_exporter/key.pem
+
+  # CA certificate used to verify client certificates
+  client_ca_file: /etc/node_exporter/client-ca.pem
+
+  # Require and verify a valid client certificate.
+  # NOTE: Other values for client_auth_type are insecure.
+  client_auth_type: RequireAndVerifyClientCert
+
+  min_version: TLS12
+```
+
+</CodeGroup>
+
+## TLS server configuration reference
+
+<ParamField path="cert_file" type="string" required>
+  Path to the PEM-encoded TLS certificate for the server.
+</ParamField>
+
+<ParamField path="key_file" type="string" required>
+  Path to the PEM-encoded private key corresponding to `cert_file`.
+</ParamField>
+
+<ParamField path="client_ca_file" type="string">
+  Path to the PEM-encoded CA certificate used to authenticate client
+  certificates. Required when `client_auth_type` is set to
+  `RequireAndVerifyClientCert`.
+</ParamField>
+
+<ParamField path="client_auth_type" type="string" default="NoClientCert">
+  Server policy for client certificate authentication. Maps to Go's
+  [`tls.ClientAuthType`](https://pkg.go.dev/crypto/tls#ClientAuthType).
+  To enable mutual TLS, use `RequireAndVerifyClientCert`. All other values
+  do not verify the client certificate.
+</ParamField>
+
+<ParamField path="client_allowed_sans" type="string[]">
+  Optional list of Subject Alternate Names (SANs) that the client certificate
+  must contain. The connection is terminated if no SAN matches. Accepted SAN
+  types: DNS, IP, email, URI.
+</ParamField>
+
+<ParamField path="min_version" type="string" default="TLS12">
+  Minimum TLS version the server will accept. Accepted values: `TLS10`,
+  `TLS11`, `TLS12`, `TLS13`.
+</ParamField>
+
+<ParamField path="max_version" type="string" default="TLS13">
+  Maximum TLS version the server will accept.
+</ParamField>
+
+<ParamField path="cipher_suites" type="string[]">
+  List of cipher suites to allow for TLS 1.0–1.2 connections. When empty,
+  Go's default cipher suites are used. Has no effect on TLS 1.3, which has
+  its own fixed cipher suite selection. See the
+  [Go documentation](https://pkg.go.dev/crypto/tls#CipherSuites) for
+  supported values.
+</ParamField>
+
+<ParamField path="prefer_server_cipher_suites" type="boolean" default="true">
+  When true, the server's cipher suite preference order (as defined in
+  `cipher_suites`) is used instead of the client's.
+</ParamField>
+
+<ParamField path="curve_preferences" type="string[]">
+  List of elliptic curves to use in ECDHE handshakes, in preference order.
+  See the [Go documentation](https://pkg.go.dev/crypto/tls#CurveID) for
+  available values.
+</ParamField>
+
+## Basic authentication
+
+Add a `basic_auth_users` map to `web-config.yml`. Keys are usernames and
+values are **bcrypt-hashed** passwords.
+
+```yaml web-config.yml
+basic_auth_users:
+  alice: $2y$10$X0h1gDsPszWURQaxFh.zoubFi6DXncSjhoQNJgRrnGs7EsimhC7zG
+  bob:   $2y$12$demoHashForDocumentationPurposesOnly0000000000000000000
+```
+
+<Note>
+  The configuration file is re-read on every request, so you can add or
+  remove users without restarting node_exporter.
+</Note>
+
+### Generating a bcrypt password hash
+
+<CodeGroup>
+
+```bash htpasswd (Apache httpd utils)
+# Install: apt install apache2-utils  /  brew install httpd
+htpasswd -nBC 10 "" | tr -d ':\n'
+# You will be prompted for a password. The output is the bcrypt hash.
+```
+
+```go Go snippet
+package main
+
+import (
+    "fmt"
+    "golang.org/x/crypto/bcrypt"
+)
+
+func main() {
+    hash, _ := bcrypt.GenerateFromPassword([]byte("mysecret"), 10)
+    fmt.Println(string(hash))
+}
+```
+
+</CodeGroup>
+
+The cost factor (10 in the examples above) controls how long the hash takes
+to compute. A higher cost increases security but slows down authentication.
+On a typical server, cost 10 takes roughly 70 ms; cost 18 can take several
+seconds. The hash is computed once per user on the first authenticated
+request and then cached.
+
+<Warning>
+  Basic authentication is suitable for a small number of users. For large
+  deployments, prefer TLS client certificates or a dedicated reverse proxy
+  for authentication.
+</Warning>
+
+## HTTP server options
+
+The `http_server_config` section controls HTTP/2 and security response headers.
+
+```yaml web-config.yml
+http_server_config:
+  # HTTP/2 is only available over TLS (default: true)
+  http2: true
+
+  headers:
+    # Recommended security headers
+    X-Frame-Options: deny
+    X-Content-Type-Options: nosniff
+    X-XSS-Protection: "1; mode=block"
+    Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+    Content-Security-Policy: "default-src 'none'"
+```
+
+## Configuring Prometheus to scrape over TLS
+
+Update your Prometheus `scrape_configs` to use HTTPS and supply credentials
+if basic auth is enabled.
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: node
+    scheme: https
+    tls_config:
+      ca_file: /etc/prometheus/node-exporter-ca.pem
+    basic_auth:
+      username: prometheus
+      password: mysecret
+    static_configs:
+      - targets: ['node-host:9100']
+```

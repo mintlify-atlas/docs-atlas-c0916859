@@ -1,0 +1,121 @@
+---
+title: 'Docker'
+description: 'Run node_exporter in a container while correctly monitoring the host system, not the container.'
+---
+
+Node exporter is designed to monitor the **host system**. Running it inside a container introduces a fundamental tension: by default, a containerized process sees only its own isolated namespaces — not the host's filesystem, process table, or network stack.
+
+A naive `docker run` without the right flags will collect metrics about the container itself, producing near-useless data. The configuration below solves this by explicitly granting the container access to the host namespaces it needs.
+
+<Warning>
+  Do not use bridge networking (the Docker default) with node_exporter. Bridge mode isolates the container's network namespace, so the exporter will report container network metrics instead of host network metrics. Always use `--net="host"`.
+</Warning>
+
+## Docker run
+
+The following command grants node_exporter the host namespaces and filesystem access it requires:
+
+```bash
+docker run -d \
+  --net="host" \
+  --pid="host" \
+  -v "/:/host:ro,rslave" \
+  quay.io/prometheus/node-exporter:latest \
+  --path.rootfs=/host
+```
+
+**Flag breakdown:**
+
+| Flag | Purpose |
+|---|---|
+| `--net="host"` | Share the host network namespace so network interface metrics reflect the real host |
+| `--pid="host"` | Share the host PID namespace so process-level metrics are accurate |
+| `-v "/:/host:ro,rslave"` | Bind-mount the host root filesystem read-only into `/host` inside the container |
+| `--path.rootfs=/host` | Tell node_exporter to use `/host` as the root when reading `/proc`, `/sys`, etc. |
+
+The `:ro,rslave` mount options mount the host filesystem read-only and propagate unmounts from the host into the container, preventing stale mount entries.
+
+<Note>
+  Any non-root mount points you want to monitor (for example, a separate data volume mounted at `/data`) must be explicitly bind-mounted into the container in addition to the root bind-mount. The root bind-mount only covers mount points visible from the host root.
+</Note>
+
+## Docker Compose
+
+<CodeGroup>
+
+```bash docker run
+docker run -d \
+  --net="host" \
+  --pid="host" \
+  -v "/:/host:ro,rslave" \
+  quay.io/prometheus/node-exporter:latest \
+  --path.rootfs=/host
+```
+
+```yaml docker-compose.yml
+---
+version: '3.8'
+
+services:
+  node_exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: node_exporter
+    command:
+      - '--path.rootfs=/host'
+    network_mode: host
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - '/:/host:ro,rslave'
+```
+
+</CodeGroup>
+
+Start with Docker Compose:
+
+```bash
+docker compose up -d
+```
+
+Verify the exporter is running and exposing metrics:
+
+```bash
+curl http://localhost:9100/metrics | head -20
+```
+
+## Timex collector
+
+On some systems, the `timex` collector requires access to time-adjustment syscalls that are restricted by Docker's default seccomp profile.
+
+```bash
+docker run -d \
+  --net="host" \
+  --pid="host" \
+  --cap-add=SYS_TIME \
+  -v "/:/host:ro,rslave" \
+  quay.io/prometheus/node-exporter:latest \
+  --path.rootfs=/host
+```
+
+Add `--cap-add=SYS_TIME` only if you specifically need the `timex` collector and are seeing permission errors. Granting additional capabilities should be deliberate.
+
+## Running as a non-root user
+
+The official image runs as the `nobody` user (as specified in the `Dockerfile`). Node exporter does not need root privileges for its default collectors — the host bind-mount and namespace flags are sufficient.
+
+```dockerfile
+# From the official Dockerfile
+USER nobody
+ENTRYPOINT ["/bin/node_exporter"]
+```
+
+The distroless variant uses the `nonroot` user (UID 65532) from the base image. In both cases, you should not override the user to `root` unless you have verified a specific collector requires it.
+
+## Image variants
+
+| Image | Base | Use case |
+|---|---|---|
+| `quay.io/prometheus/node-exporter:latest` | BusyBox | General purpose, includes a minimal shell |
+| `quay.io/prometheus/node-exporter:latest` (distroless) | Distroless Debian | Minimal attack surface, no shell |
+
+The distroless image is built separately and tagged with a `-distroless` suffix in practice. Check the [Quay.io repository](https://quay.io/repository/prometheus/node-exporter) for available tags.

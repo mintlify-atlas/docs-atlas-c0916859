@@ -1,0 +1,238 @@
+---
+title: 'Kubernetes'
+description: 'Deploy node_exporter on every cluster node using a DaemonSet, with correct host namespace access and Prometheus Operator integration.'
+---
+
+In Kubernetes, node_exporter must run on **every node** in the cluster to collect host-level metrics for each machine. The correct deployment primitive is a `DaemonSet` — Kubernetes guarantees exactly one pod per node, and automatically schedules new pods when nodes join the cluster.
+
+<Note>
+  Node exporter must access the host's PID namespace, network namespace, and filesystem to collect accurate metrics. This requires setting `hostPID: true`, `hostNetwork: true`, and mounting host paths into the container. Without these settings, the exporter will report metrics for the container's isolated namespaces rather than the underlying node.
+</Note>
+
+<Warning>
+  Enabling `hostPID` and `hostNetwork` grants the pod significant visibility into the host. With `hostPID`, the container can see all processes on the node. With `hostNetwork`, the pod shares the host's network stack. Restrict access to this DaemonSet using RBAC and ensure only trusted images are used. Review your security policy before deploying to production.
+</Warning>
+
+## DaemonSet manifest
+
+The following manifest deploys node_exporter on all nodes including control plane nodes, with the necessary host access and a non-root security context.
+
+```yaml
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: node-exporter
+    app.kubernetes.io/component: metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: node-exporter
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: node-exporter
+        app.kubernetes.io/component: metrics
+    spec:
+      hostPID: true
+      hostNetwork: true
+      hostIPC: false
+      dnsPolicy: ClusterFirstWithHostNet
+
+      # Tolerate control plane taints so the exporter runs on every node
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+        - operator: Exists
+          effect: NoExecute
+
+      containers:
+        - name: node-exporter
+          image: quay.io/prometheus/node-exporter:latest
+          args:
+            - --path.rootfs=/host
+            - --path.sysfs=/host/sys
+            - --path.procfs=/host/proc
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+            - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$
+          ports:
+            - name: metrics
+              containerPort: 9100
+              protocol: TCP
+              hostPort: 9100
+          resources:
+            requests:
+              cpu: 100m
+              memory: 30Mi
+            limits:
+              cpu: 250m
+              memory: 180Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+              mountPropagation: HostToContainer
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: host-sys
+              mountPath: /host/sys
+              readOnly: true
+
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+        - name: host-proc
+          hostPath:
+            path: /proc
+        - name: host-sys
+          hostPath:
+            path: /sys
+
+      serviceAccountName: node-exporter
+      automountServiceAccountToken: false
+```
+
+### Key fields explained
+
+| Field | Value | Reason |
+|---|---|---|
+| `hostPID: true` | `true` | Required for accurate process-level metrics |
+| `hostNetwork: true` | `true` | Required for host network interface metrics; also means the pod binds directly to host port 9100 |
+| `tolerations` | `Exists` for `NoSchedule`/`NoExecute` | Ensures the DaemonSet runs on control plane nodes, which are typically tainted to prevent workload scheduling |
+| `runAsUser` | `65534` | UID for the `nobody` user; node_exporter does not need root privileges |
+| `readOnlyRootFilesystem` | `true` | Container filesystem is read-only; all required data comes through volume mounts |
+| `mountPropagation: HostToContainer` | on `/host` | Propagates host mount events (new volumes, NFS mounts, etc.) into the container so the filesystem collector sees them |
+| `--path.rootfs=/host` | arg | Tells node_exporter to prefix all filesystem access with `/host`, reading the host's `/proc`, `/sys`, etc. |
+
+## ServiceAccount
+
+Create a minimal ServiceAccount. Node exporter does not call the Kubernetes API, so the ServiceAccount needs no RBAC rules.
+
+```yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: node-exporter
+  namespace: monitoring
+```
+
+## Service
+
+Expose the DaemonSet pods for scraping. Because `hostNetwork: true` is set, Prometheus can also scrape directly on port 9100 at each node's IP, but a headless Service makes discovery cleaner.
+
+```yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: node-exporter
+    app.kubernetes.io/component: metrics
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: node-exporter
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+      protocol: TCP
+```
+
+## ServiceMonitor for Prometheus Operator
+
+If you are using the [Prometheus Operator](https://github.com/prometheus-operator/prometheus-operator), create a `ServiceMonitor` to automatically configure scraping:
+
+```yaml
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: node-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: node-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: node-exporter
+  endpoints:
+    - port: metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      relabelings:
+        # Replace the pod IP with the node name for cleaner metric labels
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+          action: replace
+```
+
+## Deploying
+
+Apply all manifests in order:
+
+```bash
+kubectl apply -f serviceaccount.yaml
+kubectl apply -f daemonset.yaml
+kubectl apply -f service.yaml
+kubectl apply -f servicemonitor.yaml  # if using Prometheus Operator
+```
+
+Verify that a pod is running on each node:
+
+```bash
+kubectl -n monitoring get pods -l app.kubernetes.io/name=node-exporter -o wide
+```
+
+Check that metrics are being exposed from one of the pods:
+
+```bash
+kubectl -n monitoring port-forward daemonset/node-exporter 9100:9100
+curl http://localhost:9100/metrics | head -20
+```
+
+## Namespace
+
+The manifests above use a `monitoring` namespace. Create it if it does not exist:
+
+```bash
+kubectl create namespace monitoring
+```
+
+If you are using kube-prometheus-stack or another Prometheus Operator bundle, it typically creates this namespace as part of its installation. Check whether it already exists before applying.
+
+## Helm
+
+The [prometheus-community Helm chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter) provides a maintained, configurable deployment:
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+helm install node-exporter prometheus-community/prometheus-node-exporter \
+  --namespace monitoring \
+  --create-namespace
+```
+
+The chart manages the DaemonSet, Service, ServiceMonitor, and RBAC resources and handles upgrades. Use the chart for production deployments unless you have a specific reason to manage raw manifests.

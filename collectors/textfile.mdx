@@ -1,0 +1,137 @@
+---
+title: "Textfile Collector"
+description: "Expose custom and batch job metrics by writing Prometheus-formatted .prom files to a directory."
+---
+
+The textfile collector reads files matching `*.prom` from one or more directories and exposes their contents as Prometheus metrics. It is enabled by default but requires the `--collector.textfile.directory` flag to be set before it collects anything.
+
+This is similar to the [Pushgateway](https://github.com/prometheus/pushgateway), but designed for machine-level metrics rather than service-level metrics. Use it for:
+
+- Recording batch job completion times and exit codes
+- Exposing static metadata about a host (role, environment, region)
+- Integrating custom scripts that produce Prometheus-formatted output
+
+## Setup
+
+<Steps>
+  <Step title="Create a directory for metric files">
+    ```bash
+    sudo mkdir -p /var/lib/node_exporter/textfile_collector
+    sudo chown node_exporter:node_exporter /var/lib/node_exporter/textfile_collector
+    ```
+  </Step>
+  <Step title="Start node_exporter with the directory flag">
+    ```bash
+    ./node_exporter --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+    ```
+
+    The flag is repeatable and supports glob patterns (since v1.9):
+
+    ```bash
+    ./node_exporter \
+      --collector.textfile.directory=/var/lib/node_exporter/textfile_collector \
+      --collector.textfile.directory=/opt/custom_metrics/*.prom
+    ```
+  </Step>
+  <Step title="Write .prom files to the directory">
+    Any file matching `*.prom` is parsed as Prometheus text exposition format. See the examples below.
+  </Step>
+  <Step title="Verify the metrics appear">
+    ```bash
+    curl -s http://localhost:9100/metrics | grep -E '^(my_|node_textfile)'
+    ```
+
+    The collector also exposes `node_textfile_mtime_seconds{file="..."}` for each successfully read file, which you can alert on if files become stale.
+  </Step>
+</Steps>
+
+## Writing metric files
+
+Files must use the [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/). Timestamps are **not** supported — node_exporter will reject files containing timestamps.
+
+<Warning>
+Timestamps in `.prom` files are not supported and will cause the file to be skipped. Omit the timestamp field from all metric lines.
+</Warning>
+
+### Cron job completion tracking
+
+Use an atomic write (write to a temp file, then `mv`) to avoid node_exporter reading a partially-written file:
+
+```bash cron_job.sh
+#!/bin/bash
+TEXTFILE_DIR=/var/lib/node_exporter/textfile_collector
+TMPFILE=$(mktemp "$TEXTFILE_DIR/.my_batch_job.prom.XXXXXX")
+
+# Write metrics to temp file
+cat > "$TMPFILE" <<EOF
+# HELP my_batch_job_last_success_timestamp_seconds Unix timestamp of last successful run.
+# TYPE my_batch_job_last_success_timestamp_seconds gauge
+my_batch_job_last_success_timestamp_seconds $(date +%s)
+
+# HELP my_batch_job_duration_seconds Duration of the last run in seconds.
+# TYPE my_batch_job_duration_seconds gauge
+my_batch_job_duration_seconds 42.3
+EOF
+
+# Atomically replace the metrics file
+mv "$TMPFILE" "$TEXTFILE_DIR/my_batch_job.prom"
+```
+
+<Tip>
+The atomic `mv` pattern prevents node_exporter from reading a half-written file during a scrape. Always write to a temp file in the same directory first, then rename it.
+</Tip>
+
+### Static host metadata
+
+Expose labels and roles that don't change at runtime:
+
+```bash
+cat > /var/lib/node_exporter/textfile_collector/role.prom <<EOF
+# HELP node_role Host role label.
+# TYPE node_role gauge
+node_role{role="application_server",environment="production",region="us-east-1"} 1
+EOF
+```
+
+### Tracking exit codes
+
+Record whether a job succeeded or failed:
+
+```bash
+EXIT_CODE=$?
+cat > /tmp/backup_job.prom.$$ <<EOF
+# HELP backup_job_exit_code Exit code of the last backup job.
+# TYPE backup_job_exit_code gauge
+backup_job_exit_code $EXIT_CODE
+EOF
+mv /tmp/backup_job.prom.$$ /var/lib/node_exporter/textfile_collector/backup_job.prom
+```
+
+## Exposed metrics
+
+In addition to the metrics from your `.prom` files, the textfile collector exposes:
+
+| Metric | Description |
+|--------|-------------|
+| `node_textfile_mtime_seconds{file="..."}` | Unix mtime of each successfully read file |
+| `node_textfile_scrape_error` | `1` if any error occurred reading the textfile directory |
+
+Use `node_textfile_mtime_seconds` to alert when files go stale:
+
+```promql
+time() - node_textfile_mtime_seconds{file="/var/lib/node_exporter/textfile_collector/my_batch_job.prom"} > 3600
+```
+
+## systemd service integration
+
+When running node_exporter as a systemd service, ensure the `node_exporter` user can write to the textfile directory. Add the flag to the environment file:
+
+```ini /etc/sysconfig/node_exporter
+OPTIONS="--collector.textfile.directory /var/lib/node_exporter/textfile_collector"
+```
+
+Then scripts running as other users should write files owned by `node_exporter`, or the directory should be world-writable with sticky bit:
+
+```bash
+chmod 1777 /var/lib/node_exporter/textfile_collector
+```

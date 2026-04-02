@@ -1,0 +1,94 @@
+---
+title: "Introduction"
+description: "Prometheus exporter for hardware and OS metrics exposed by *NIX kernels, written in Go with pluggable metric collectors."
+---
+
+Node exporter is a Prometheus exporter that collects hardware and operating system metrics from \*NIX hosts. It reads from kernel interfaces such as `/proc` and `/sys`, exposes those metrics in the [Prometheus exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/), and serves them over HTTP so that Prometheus can scrape them.
+
+## How it fits into the Prometheus ecosystem
+
+Prometheus follows a pull model: a central Prometheus server scrapes HTTP endpoints at a configured interval. Node exporter's role is to translate raw OS and kernel data into that format on each host you want to monitor.
+
+```
+Prometheus server
+    │
+    │  GET /metrics (every scrape_interval)
+    ▼
+node_exporter :9100
+    │
+    │  reads
+    ▼
+/proc, /sys, kernel APIs
+```
+
+Each metric emitted by node exporter carries the `node_` prefix — for example, `node_cpu_seconds_total` or `node_memory_MemTotal_bytes`. This prefix keeps node metrics clearly separated from application or service metrics in your Prometheus database.
+
+## Key concepts
+
+### Collectors
+
+A collector is a self-contained module that knows how to read a specific category of metrics from the host. Node exporter ships with over 60 collectors covering CPU, memory, disk, network, filesystems, hardware sensors, and more.
+
+Collectors are enabled or disabled on the command line:
+
+- Enable an additional collector: `--collector.<name>`
+- Disable a default collector: `--no-collector.<name>`
+- Disable all defaults and opt in selectively: `--collector.disable-defaults --collector.<name>`
+
+### The metrics endpoint
+
+Node exporter listens on port `9100` by default and exposes metrics at the `/metrics` path. You can inspect it directly with curl:
+
+```bash
+curl http://localhost:9100/metrics
+```
+
+The path and listen address are configurable via `--web.telemetry-path` and `--web.listen-address`.
+
+### Metric namespace
+
+All metrics produced by node exporter use the `node_` prefix:
+
+| Metric | Description |
+|--------|-------------|
+| `node_cpu_seconds_total` | Total CPU time spent in each mode, per CPU |
+| `node_memory_MemTotal_bytes` | Total physical memory |
+| `node_filesystem_avail_bytes` | Bytes available to unprivileged users per filesystem |
+| `node_network_receive_bytes_total` | Network bytes received per interface |
+| `node_load1` | 1-minute load average |
+
+## Platform support
+
+Node exporter runs on any \*NIX host. Linux is the primary supported platform with the most collectors; other platforms receive a subset of collectors.
+
+| Platform | Support level |
+|----------|--------------|
+| Linux | Primary — the full collector set |
+| Darwin (macOS) | Secondary — CPU, disk, filesystem, network, load, memory |
+| FreeBSD | Secondary — CPU, disk, filesystem, network, load, memory |
+| OpenBSD | Secondary — CPU, disk, filesystem, network, load, memory |
+| Solaris | Secondary — CPU, load, zone info |
+| AIX | Secondary — select metrics added in v1.9.0 |
+
+<Note>
+Node exporter is designed to run as an unprivileged user. Root access is not required for the default collector set, and the binary will log a warning if started as root. A handful of disabled-by-default collectors (such as `perf` and `slabinfo`) may require elevated permissions or specific kernel configuration.
+</Note>
+
+Windows is not supported. Use the [Windows exporter](https://github.com/prometheus-community/windows_exporter) for Windows hosts. For NVIDIA GPU metrics, use [prometheus-dcgm](https://github.com/NVIDIA/dcgm-exporter).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Download a pre-built binary or build from source.
+  </Card>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Go from zero to metrics in Prometheus in under five minutes.
+  </Card>
+  <Card title="Collectors" icon="chart-bar" href="/collectors/overview">
+    Browse the full list of available collectors and what each one exposes.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/flags">
+    All command-line flags, TLS setup, and per-collector options.
+  </Card>
+</CardGroup>
